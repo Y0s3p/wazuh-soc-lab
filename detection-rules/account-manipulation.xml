@@ -1,9 +1,22 @@
 <group name="local,account_manipulation,privilege_escalation,">
 
+  <!-- Detect a user being added to the sudo group -->
+
   <rule id="100101" level="10">
     <if_sid>5402</if_sid>
     <match>usermod -aG sudo</match>
     <description>Local: User added to sudo group via usermod.</description>
+    <mitre>
+      <id>T1098</id>
+    </mitre>
+    <group>account_manipulation,privilege_escalation,</group>
+  </rule>
+
+  <!-- Correlate repeated sudo group privilege assignments -->
+
+  <rule id="100102" level="12" frequency="2" timeframe="120">
+    <if_matched_sid>100101</if_matched_sid>
+    <description>Possible repeated account privilege escalation: user added to sudo group.</description>
     <mitre>
       <id>T1098</id>
     </mitre>

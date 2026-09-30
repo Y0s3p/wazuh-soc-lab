@@ -1,654 +1,398 @@
-\# Privilege Escalation / Account Manipulation
+# Privilege Escalation / Account Manipulation Scenario
 
+## Objective
 
+Simulate account creation and privilege manipulation on an Ubuntu endpoint and verify that Wazuh can detect, correlate, and provide evidence of potentially suspicious account and privilege changes.
 
-\## Objective
+The scenario demonstrates the following workflow:
 
+**Simulation → Detection → Correlation → Investigation → Verification**
 
+---
 
-Simulate a controlled account manipulation scenario on a Linux endpoint and investigate how Wazuh detects the creation of a new user, privilege assignment, and subsequent account modification.
+## Environment
 
+| Component                      | Details            |
+| ------------------------------ | ------------------ |
+| Wazuh Manager                  | `wazuh-server`     |
+| Wazuh version                  | 4.14.7             |
+| Endpoint                       | `soc-server`       |
+| Endpoint IP                    | `192.168.1.36`     |
+| Operating System               | Ubuntu 26.04.1 LTS |
+| Agent ID                       | `001`              |
+| User performing the simulation | `jose`             |
 
+---
 
-The objective is to demonstrate how multiple Wazuh detection mechanisms can provide complementary evidence of potentially suspicious privilege escalation activity.
+## Scenario
 
+A temporary local account is created and added to the `sudo` group.
 
+The activity is intentionally performed by the administrator to simulate behavior that could indicate account manipulation or privilege escalation in a real environment.
 
-The scenario follows the SOC workflow:
+The test account used during the simulation was:
 
+```text
+wazuh-test-user
+```
 
+The account was removed after testing.
 
-\*\*Simulate → Detect → Investigate → Respond → Verify\*\*
+---
 
+## Attack / Event Simulation
 
-
-\---
-
-
-
-\## Environment
-
-
-
-| Component                | Details            |
-
-| ------------------------ | ------------------ |
-
-| Wazuh Manager            | `wazuh-server`     |
-
-| Wazuh Endpoint           | `soc-server`       |
-
-| Endpoint OS              | Ubuntu 26.04.1 LTS |
-
-| Wazuh Version            | 4.14.7             |
-
-| Endpoint IP              | `192.168.1.36`     |
-
-| Manager IP               | `192.168.1.35`     |
-
-| User used for simulation | `jose`             |
-
-
-
-The endpoint collects system events through `journald`, which allows Wazuh to monitor authentication and account-management activity.
-
-
-
-\---
-
-
-
-\## Scenario
-
-
-
-A privileged user creates a new local account and subsequently adds that account to the `sudo` group.
-
-
-
-From a defensive perspective, this sequence can be relevant because unauthorized account creation followed by privilege assignment can provide an attacker with persistent or elevated access.
-
-
-
-The activity was intentionally generated in a controlled lab environment.
-
-
-
-\---
-
-
-
-\## Attack / Event Simulation
-
-
-
-\### 1. Create a new user
-
-
-
-On `soc-server`:
-
-
+### 1. Create a local account
 
 ```bash
-
 sudo useradd wazuh-test-user
-
 ```
 
+Wazuh detected the account creation through the system logs.
 
+Relevant rules:
 
-This generated the following system events:
+* **5901 — New group added to the system**
+* **5902 — New user added to the system**
 
+The event contained information such as:
 
+* Username
+* UID
+* GID
+* Home directory
+* Shell
+* Source terminal
 
-```text
+---
 
-new group: name=wazuh-test-user, GID=1001
-
-new user: name=wazuh-test-user, UID=1001, GID=1001,
-
-home=/home/wazuh-test-user, shell=/bin/sh
-
-```
-
-
-
-Wazuh detected the account creation with:
-
-
-
-```text
-
-Rule: 5902
-
-Level: 8
-
-New user added to the system.
-
-```
-
-
-
-A corresponding group creation was also detected:
-
-
-
-```text
-
-Rule: 5901
-
-Level: 8
-
-New group added to the system.
-
-```
-
-
-
-\---
-
-
-
-\### 2. Add the user to the sudo group
-
-
-
-The test account was then granted administrative privileges:
-
-
+### 2. Add the account to the sudo group
 
 ```bash
-
 sudo usermod -aG sudo wazuh-test-user
-
 ```
 
-
-
-The underlying system generated:
-
-
+The underlying system log contained:
 
 ```text
-
-add 'wazuh-test-user' to group 'sudo'
-
-add 'wazuh-test-user' to shadow group 'sudo'
-
+usermod: add 'wazuh-test-user' to group 'sudo'
 ```
 
+Wazuh also detected the command executed through `sudo`.
 
+The initial detection was:
 
-Wazuh also detected the `sudo` command through its standard rule:
+* **Rule 5402 — Successful sudo to ROOT executed**
+* Level: 3
 
-
+The event included the exact command:
 
 ```text
-
-Rule: 5402
-
-Level: 3
-
-Successful sudo to ROOT executed.
-
+/usr/sbin/usermod -aG sudo wazuh-test-user
 ```
 
+---
 
+## Custom Detection Rule 100101
 
-\---
-
-
-
-\## Custom Detection Rule
-
-
-
-A custom Wazuh rule was created to specifically identify the addition of a user to the `sudo` group.
-
-
-
-File:
-
-
-
-```text
-
-/var/ossec/etc/rules/local\_rules.xml
-
-```
-
-
-
-Rule:
-
-
+A custom Wazuh rule was created to specifically identify a user being added to the `sudo` group.
 
 ```xml
-
 <rule id="100101" level="10">
-
-&#x20; <if\_sid>5402</if\_sid>
-
-&#x20; <match>usermod -aG sudo</match>
-
-&#x20; <description>Local: User added to sudo group via usermod.</description>
-
-&#x20; <mitre>
-
-&#x20;   <id>T1098</id>
-
-&#x20; </mitre>
-
-&#x20; <group>account\_manipulation,privilege\_escalation,</group>
-
+  <if_sid>5402</if_sid>
+  <match>usermod -aG sudo</match>
+  <description>Local: User added to sudo group via usermod.</description>
+  <mitre>
+    <id>T1098</id>
+  </mitre>
+  <group>account_manipulation,privilege_escalation,</group>
 </rule>
-
 ```
 
+This raises the severity from the generic sudo detection to **Level 10**.
 
+The Wazuh Dashboard displayed:
 
-The rule was validated with:
+* Rule ID: `100101`
+* Level: `10`
+* MITRE technique: `T1098`
+* MITRE technique name: `Account Manipulation`
+* MITRE tactic: `Persistence`
+* Command: `/usr/sbin/usermod -aG sudo wazuh-test-user`
+* Source user: `jose`
+* Destination user: `root`
 
+---
 
+## Correlation Rule 100102
+
+A second custom rule was created to detect repeated occurrences of the custom `100101` detection.
+
+```xml
+<rule id="100102" level="12" frequency="2" timeframe="120">
+  <if_matched_sid>100101</if_matched_sid>
+  <description>Possible repeated account privilege escalation: user added to sudo group.</description>
+  <mitre>
+    <id>T1098</id>
+  </mitre>
+  <group>account_manipulation,privilege_escalation,</group>
+</rule>
+```
+
+The rule requires:
+
+* **2 occurrences** of rule `100101`
+* Within a **120-second timeframe**
+* The resulting alert is raised to **Level 12**
+
+This was verified by executing the following command twice in quick succession:
 
 ```bash
-
-sudo /var/ossec/bin/wazuh-analysisd -t
-
+sudo usermod -aG sudo wazuh-test-user
+sudo usermod -aG sudo wazuh-test-user
 ```
 
+Wazuh generated the expected correlation alert.
 
+---
 
-and the Wazuh Manager was restarted successfully.
+## Detection and Correlation
 
-
-
-\---
-
-
-
-\## Detection
-
-
-
-The custom rule generated:
-
-
+The resulting detection chain was:
 
 ```text
-
-Rule: 100101
-
-Level: 10
-
-Local: User added to sudo group via usermod.
-
-```
-
-
-
-The alert included the exact command:
-
-
-
-```text
-
-command: /usr/sbin/usermod -aG sudo wazuh-test-user
-
-```
-
-
-
-This provides useful investigative context because the alert identifies both the privileged operation and the command responsible for it.
-
-
-
-\---
-
-
-
-\## Additional Evidence
-
-
-
-The scenario generated several independent indicators that can be investigated together.
-
-
-
-\### Account creation
-
-
-
-```text
-
-Rule 5901 — New group added to the system.
-
-Rule 5902 — New user added to the system.
-
-```
-
-
-
-\### Privileged command execution
-
-
-
-```text
-
-Rule 5402 — Successful sudo to ROOT executed.
-
-```
-
-
-
-\### Privilege assignment
-
-
-
-```text
-
-Rule 100101 — Local: User added to sudo group via usermod.
-
-```
-
-
-
-\### File Integrity Monitoring
-
-
-
-Wazuh FIM detected modifications to:
-
-
-
-```text
-
-/etc/gshadow
-
-```
-
-
-
-The changes occurred as a consequence of the account and group modifications.
-
-
-
-\### Account deletion
-
-
-
-After the test was completed, the account was removed:
-
-
-
-```bash
-
-sudo userdel -r wazuh-test-user
-
-```
-
-
-
-Wazuh detected this with:
-
-
-
-```text
-
-Rule: 5903
-
-Level: 3
-
-Group (or user) deleted from the system.
-
-```
-
-
-
-\---
-
-
-
-\## Investigation
-
-
-
-The events provide a timeline that can be reconstructed from the Wazuh alerts:
-
-
-
-```text
-
-User creation
-
-&#x20;   ↓
-
-Rule 5901 / 5902
-
-&#x20;   ↓
-
-sudo execution
-
-&#x20;   ↓
-
+sudo usermod -aG sudo
+        │
+        ▼
 Rule 5402
-
-&#x20;   ↓
-
-User added to sudo group
-
-&#x20;   ↓
-
+Successful sudo to ROOT
+Level 3
+        │
+        ▼
 Rule 100101
-
-&#x20;   ↓
-
-/etc/gshadow modified
-
-&#x20;   ↓
-
-FIM Rule 550
-
-&#x20;   ↓
-
-Test account removed
-
-&#x20;   ↓
-
-Rule 5903
-
+User added to sudo group
+Level 10
+        │
+        ▼
+2 matching events within 120 seconds
+        │
+        ▼
+Rule 100102
+Possible repeated account privilege escalation
+Level 12
 ```
 
+The Wazuh Dashboard confirmed the `100102` event with:
 
+* Rule ID: `100102`
+* Level: `12`
+* Frequency: `2`
+* MITRE technique: `T1098 — Account Manipulation`
+* MITRE tactic: `Persistence`
+* Group: `account_manipulation, privilege_escalation`
+* Command:
+  `/usr/sbin/usermod -aG sudo wazuh-test-user`
 
-This demonstrates how several independent telemetry sources can contribute to the investigation of a potential account-manipulation event.
+---
 
+## Additional Evidence
 
+The account lifecycle generated several independent indicators that can be correlated during an investigation.
 
-The activity itself was authorized and intentionally generated as part of the lab exercise.
+### Account creation
 
+* Rule `5901` — New group added
+* Rule `5902` — New user added
 
+### Privileged execution
 
-\---
+* Rule `5402` — Successful sudo to ROOT
 
+### Custom detection
 
+* Rule `100101` — User added to sudo group
 
-\## Response
+### Correlation
 
+* Rule `100102` — Repeated account privilege escalation detection
 
+### Account removal
 
-No destructive automated response was configured for this scenario.
+* Rule `5903` — Group or user deleted from the system
 
+### File Integrity Monitoring
 
-
-The appropriate response in a real environment would depend on the investigation and could include:
-
-
-
-1\. Validate whether the account creation was authorized.
-
-2\. Identify the user or process responsible for the privileged operation.
-
-3\. Review the account's group memberships.
-
-4\. Review authentication activity associated with the account.
-
-5\. Disable or remove an unauthorized account if confirmed.
-
-6\. Investigate additional persistence or privilege-escalation activity.
-
-7\. Preserve relevant logs and evidence.
-
-
-
-The lab intentionally focuses on \*\*detection and investigation\*\* rather than automatically deleting or disabling accounts.
-
-
-
-\---
-
-
-
-\## Verification
-
-
-
-After the simulation, the test account was removed:
-
-
-
-```bash
-
-sudo userdel -r wazuh-test-user
-
-```
-
-
-
-The Wazuh alerts confirmed the account lifecycle:
-
-
+Changes to:
 
 ```text
-
-5902 → Account created
-
-100101 → Account added to sudo
-
-550 → /etc/gshadow modified
-
-5903 → Account deleted
-
+/etc/gshadow
 ```
 
+were detected by Wazuh FIM using:
 
+* Rule `550`
+* Integrity checksum changed
 
-This verified that Wazuh successfully monitored the relevant account-management activity throughout the scenario.
+This provides an additional indicator that account/group configuration was modified.
 
+---
 
+## Investigation
 
-\---
+The Wazuh Dashboard was used to investigate the generated alerts rather than relying exclusively on command-line log analysis.
 
+Relevant fields observed during investigation included:
 
+```text
+agent.name
+agent.ip
+data.command
+data.srcuser
+data.dstuser
+data.tty
+data.pwd
+rule.id
+rule.level
+rule.description
+rule.mitre.id
+rule.mitre.tactic
+rule.mitre.technique
+```
 
-\## MITRE ATT\&CK
+The investigation established that:
 
+1. The activity originated from `soc-server`.
+2. The command was executed by the `jose` account.
+3. `sudo` executed the command with `root` privileges.
+4. The command added `wazuh-test-user` to the `sudo` group.
+5. Wazuh generated the custom Level 10 detection.
+6. Repeated executions triggered the Level 12 correlation rule.
+7. The activity was intentionally generated as part of this controlled test.
 
+---
 
-The custom detection is mapped to:
+## Response
 
+No automated response was configured for this scenario.
 
+This is intentional because adding a user to the `sudo` group may be legitimate administrative activity.
 
-\* \*\*T1098 — Account Manipulation\*\*
+A real SOC investigation should first establish:
 
+1. Whether the account creation was authorized.
+2. Who performed the action.
+3. Whether the privilege assignment was expected.
+4. Whether the account should remain in the `sudo` group.
+5. Whether additional persistence or suspicious activity occurred.
 
+If the activity is confirmed to be unauthorized, appropriate response actions could include removing the account or privilege assignment, preserving relevant evidence, and investigating the originating session and additional activity.
 
-The scenario demonstrates how modifying account privileges can be monitored as potential account manipulation activity.
+---
 
+## Verification
 
+After completing the simulation, the temporary account was removed:
 
-\---
+```bash
+sudo userdel wazuh-test-user
+```
 
+The endpoint was therefore returned to its original account state.
 
+The deletion itself generated additional Wazuh telemetry, including rule `5903` and FIM changes to `/etc/gshadow`.
 
-\## Lessons Learned
+---
 
+## MITRE ATT&CK
 
+The custom rules were mapped to:
 
-\* Wazuh can detect Linux account creation and deletion using built-in rules.
+* **T1098 — Account Manipulation**
+* Tactic: **Persistence**
 
-\* `sudo` activity provides useful command-level evidence for investigations.
+The scenario demonstrates how account and group modifications can provide security telemetry relevant to account manipulation.
 
-\* FIM adds an independent source of evidence by detecting changes to sensitive files such as `/etc/gshadow`.
+---
 
-\* Custom Wazuh rules can increase detection specificity and severity for security-relevant commands.
+## Lessons Learned
 
-\* Combining multiple alerts provides better investigative context than relying on a single event.
+### 1. Generic detections can be made more useful
 
-\* Not every detected privilege modification is malicious; authorization and context must be established during investigation.
+Rule `5402` detects successful sudo execution but is relatively generic.
 
+The custom `100101` rule provides a more specific detection for adding an account to the `sudo` group.
 
+### 2. Correlation increases detection severity
 
-\---
+Rule `100102` demonstrates how repeated occurrences of a lower-level custom detection can generate a higher-severity alert.
 
+### 3. Multiple independent indicators improve investigation
 
+The same activity generated telemetry from:
 
-\## Scenario Status
+* `useradd`
+* `usermod`
+* `sudo`
+* PAM
+* FIM
+* Wazuh custom rules
+* Wazuh correlation
 
+This allows an analyst to reconstruct the account lifecycle rather than relying on a single alert.
 
+### 4. The Dashboard is useful for investigation
 
-\*\*Completed\*\*
+The Wazuh Dashboard provided direct visibility into:
 
+* Alert severity
+* Commands
+* Users
+* Agents
+* MITRE mappings
+* Rule information
+* Correlated detections
 
+This scenario was therefore investigated using both the underlying system logs and the Wazuh Dashboard.
 
-\### Detection capabilities demonstrated
+---
 
+## Evidence
 
+Recommended screenshots for the project:
 
-\* \[x] New group detection
+1. Rule `100101` — Level 10 custom detection.
+2. Rule `100102` — Level 12 correlation detection.
+3. Threat Hunting view showing the sequence of `100101` and `100102`.
+4. Rule details showing the MITRE `T1098` mapping.
 
-\* \[x] New user detection
+---
 
-\* \[x] Privileged command detection
+## Scenario Status
 
-\* \[x] Custom privilege-assignment detection
+**Completed**
 
-\* \[x] File Integrity Monitoring
+The scenario successfully demonstrated:
 
-\* \[x] Account deletion detection
+* Account creation detection
+* Privileged command detection
+* Custom Wazuh rule creation
+* Account manipulation detection
+* Event correlation
+* Severity escalation
+* MITRE ATT&CK mapping
+* Dashboard-based investigation
+* Post-test cleanup
 
-\* \[x] MITRE ATT\&CK mapping
+---
 
-\* \[x] Investigation timeline
+## Next Steps
 
-\* \[x] Controlled verification
+Potential future scenarios:
 
-
-
-\---
-
-
-
-\## Next Steps
-
-
-
-Potential future improvements include:
-
-
-
-\* Detecting suspicious modifications to other privileged groups.
-
-\* Monitoring changes to `/etc/sudoers` and `/etc/sudoers.d/`.
-
-\* Creating additional custom rules for privilege escalation techniques.
-
-\* Correlating account creation with subsequent authentication activity.
-
-\* Expanding the scenario to include persistence mechanisms.
-
-\* Adding Windows account and privilege-manipulation scenarios.
-
-
-
+* Suspicious process execution
+* Persistence mechanisms
+* File integrity and suspicious modification
+* SSH privilege escalation
+* Malware-like behavior
+* Windows endpoint monitoring with Sysmon
+* Custom detection and automated response
