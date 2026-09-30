@@ -1,0 +1,13 @@
+<group name="local,account_manipulation,privilege_escalation,">
+
+  <rule id="100101" level="10">
+    <if_sid>5402</if_sid>
+    <match>usermod -aG sudo</match>
+    <description>Local: User added to sudo group via usermod.</description>
+    <mitre>
+      <id>T1098</id>
+    </mitre>
+    <group>account_manipulation,privilege_escalation,</group>
+  </rule>
+
+</group>
