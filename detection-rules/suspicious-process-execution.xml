@@ -1,0 +1,14 @@
+<group name="local,process_execution,command_execution,">
+
+  <rule id="100200" level="8">
+    <if_sid>80700</if_sid>
+    <field name="audit.execve.a0">bash</field>
+    <field name="audit.execve.a1">-c</field>
+    <description>Local: Bash executed a command using -c.</description>
+    <mitre>
+      <id>T1059.004</id>
+    </mitre>
+    <group>process_execution,command_execution,</group>
+  </rule>
+
+</group>

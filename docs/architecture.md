@@ -2,14 +2,14 @@
 
 ## Overview
 
-The laboratory is a virtualized home SOC environment designed to practice security monitoring, detection, investigation and incident response.
+The laboratory is a virtualized home SOC environment designed to practice security monitoring, detection engineering, investigation and incident response.
 
 The current environment consists of two virtual machines connected to the same local network:
 
 * `wazuh-server` — central Wazuh infrastructure.
 * `soc-server` — monitored Ubuntu endpoint.
 
-The environment will be expanded later with additional endpoints and an attacker machine for controlled security simulations.
+The environment is designed to be expanded later with additional endpoints and an attacker machine for controlled security simulations.
 
 ---
 
@@ -30,10 +30,13 @@ The environment will be expanded later with additional endpoints and an attacker
        | 2023             |          | LTS              |
        |                  |          |                  |
        | Wazuh Manager    |<---------| Wazuh Agent      |
-       | Wazuh Indexer    |          | FIM              |
-       | Wazuh Dashboard  |          | SCA              |
-       |                  |          | Syscollector     |
-       +------------------+          +------------------+
+       | Wazuh Indexer    |          | auditd           |
+       | Wazuh Dashboard  |          | FIM              |
+       |                  |          | SCA              |
+       +------------------+          | Syscollector     |
+                                     | Vulnerability    |
+                                     | Detection        |
+                                     +------------------+
 ```
 
 ---
@@ -66,6 +69,18 @@ Its responsibilities include:
 * Alert generation.
 * Vulnerability data processing.
 * Security monitoring.
+
+Custom detection rules are stored in the Wazuh Manager under:
+
+```text
+/var/ossec/etc/rules/
+```
+
+The laboratory's custom rules are maintained in the GitHub repository under:
+
+```text
+detection-rules/
+```
 
 #### Wazuh Indexer
 
@@ -108,10 +123,278 @@ The endpoint currently provides:
 * File Integrity Monitoring (FIM).
 * Security Configuration Assessment (SCA).
 * System and software inventory.
-* Vulnerability assessment.
+* Vulnerability detection.
 * SSH monitoring.
 * UFW firewall protection.
 * Hardened SSH configuration.
+* Linux audit logging through `auditd`.
+
+---
+
+## Auditd Telemetry
+
+The endpoint uses `auditd` to provide detailed Linux audit telemetry.
+
+Auditd records security-relevant operating system activity, including process execution events.
+
+The current laboratory uses `EXECVE` events to monitor command execution.
+
+The relevant telemetry flow is:
+
+```text
+Process Execution
+       |
+       v
+     auditd
+       |
+       v
+/var/log/audit/audit.log
+       |
+       v
+ Wazuh Logcollector
+       |
+       v
+ Wazuh Manager
+```
+
+For example, executing:
+
+```bash
+curl http://example.com
+```
+
+generates an audit event containing the executed command and its arguments.
+
+Wazuh's auditd decoder extracts these values into structured fields such as:
+
+```text
+audit.execve.a0
+audit.execve.a1
+audit.execve.a2
+...
+audit.execve.a7
+```
+
+These fields can then be used by custom Wazuh detection rules.
+
+---
+
+## Detection Architecture
+
+The laboratory follows a detection-engineering workflow in which endpoint behavior is converted into actionable security alerts.
+
+```text
+Endpoint Behavior
+       |
+       v
+    Telemetry
+       |
+       v
+    Collection
+       |
+       v
+     Decoder
+       |
+       v
+      Rule
+       |
+       v
+     Alert
+       |
+       v
+ Investigation
+       |
+       v
+ Documentation
+```
+
+### 1. Endpoint Behavior
+
+A security-relevant behavior occurs on the monitored endpoint.
+
+Examples include:
+
+* SSH authentication failures.
+* Account or group manipulation.
+* Suspicious command execution.
+* HTTP downloads using command-line tools.
+
+### 2. Telemetry
+
+The endpoint generates telemetry describing the behavior.
+
+Depending on the scenario, this may come from:
+
+* Wazuh Agent data collection.
+* Linux auditd.
+* Authentication logs.
+* File Integrity Monitoring.
+* System inventory.
+
+### 3. Collection
+
+The Wazuh Agent collects relevant endpoint data and forwards it to the Wazuh Manager.
+
+For auditd events, Wazuh Logcollector reads:
+
+```text
+/var/log/audit/audit.log
+```
+
+### 4. Decoder
+
+Wazuh decoders transform raw log messages into structured fields.
+
+For auditd `EXECVE` events, command arguments are exposed through fields such as:
+
+```text
+audit.execve.a0
+audit.execve.a1
+audit.execve.a2
+```
+
+### 5. Detection Rule
+
+Custom Wazuh rules evaluate the decoded event and determine whether the behavior is relevant enough to generate an alert.
+
+The laboratory's custom rules use IDs in the `100xxx` range.
+
+### 6. Alert
+
+When a rule matches, Wazuh generates an alert containing information about the detected behavior.
+
+The alert can then be investigated through the Wazuh Dashboard.
+
+### 7. Investigation
+
+Detection is not considered complete simply because an alert was generated.
+
+The event should be investigated using available context such as:
+
+* User.
+* Command and arguments.
+* Parent process.
+* Process ID.
+* Working directory.
+* Authentication context.
+* Related file modifications.
+* Network activity.
+* Process ancestry.
+* Related alerts.
+
+### 8. Documentation
+
+Each detection scenario is documented in the repository with its:
+
+* Objective.
+* Hypothesis.
+* Telemetry source.
+* Detection logic.
+* Validation.
+* MITRE ATT&CK mapping.
+* Investigation considerations.
+* Evidence.
+* Limitations.
+
+---
+
+## Current Detection Scenarios
+
+The laboratory currently contains the following detection scenarios:
+
+### SSH Authentication
+
+Detects suspicious SSH authentication activity, including repeated authentication failures.
+
+The scenario uses Wazuh's authentication monitoring and built-in SSH detection rules.
+
+### Privilege and Account Manipulation
+
+Detects account and privilege-related activity such as:
+
+* Successful privilege escalation through `sudo`.
+* New user creation.
+* New group creation.
+* User or group deletion.
+* Addition of a user to the `sudo` group.
+
+Custom rules include:
+
+```text
+100101 — User added to the sudo group via usermod.
+100102 — Correlation of repeated account manipulation activity.
+```
+
+### Suspicious Process Execution
+
+Uses Linux auditd telemetry to detect execution of:
+
+```text
+bash -c <command>
+```
+
+Custom rule:
+
+```text
+100200 — Bash executed a command using -c.
+```
+
+MITRE ATT&CK mapping:
+
+```text
+T1059.004 — Unix Shell
+```
+
+### Suspicious HTTP Download
+
+Uses auditd `EXECVE` telemetry to identify `curl` or `wget` commands containing an unencrypted HTTP URL.
+
+Examples:
+
+```text
+curl http://example.com
+curl -L http://example.com
+wget http://example.com
+```
+
+The detection intentionally distinguishes HTTP from HTTPS to reduce unnecessary alerts.
+
+Custom rule:
+
+```text
+100300 — HTTP download attempted using curl or wget.
+```
+
+The scenario is designed to identify potentially suspicious file or resource transfer activity rather than assume that every use of `curl` or `wget` is malicious.
+
+---
+
+## Custom Detection Rules
+
+Custom Wazuh rules developed for the laboratory are maintained separately from the scenario documentation.
+
+Repository location:
+
+```text
+detection-rules/
+```
+
+Current rule organization:
+
+```text
+detection-rules/
+├── account-manipulation.xml
+├── suspicious-process-execution.xml
+└── suspicious-http-download.xml
+```
+
+This separation allows detection logic to be reviewed independently from the documentation and evidence associated with each scenario.
+
+The rules are deployed to the Wazuh Manager under:
+
+```text
+/var/ossec/etc/rules/
+```
 
 ---
 
@@ -126,7 +409,11 @@ Ubuntu Endpoint
       v
 Wazuh Manager
       |
-      +------> Alert Analysis
+      +------> Decoder Processing
+      |
+      +------> Rule Processing
+      |
+      +------> Alert Generation
       |
       +------> Vulnerability Processing
       |
@@ -139,7 +426,7 @@ Wazuh Dashboard
 
 The Wazuh Agent collects security-related information from the endpoint and communicates it to the Wazuh Manager.
 
-The Manager processes the collected information and generates alerts when configured detection rules identify relevant events.
+The Manager processes the collected information, applies decoders and detection rules, and generates alerts when configured rules identify relevant events.
 
 The resulting data is stored in the Wazuh Indexer and made available through the Wazuh Dashboard.
 
@@ -162,6 +449,56 @@ The network architecture will be expanded when additional laboratory systems are
 
 ---
 
+## Repository Structure
+
+The repository is organized according to the distinction between infrastructure documentation, detection logic and individual detection scenarios.
+
+```text
+wazuh-soc-lab/
+│
+├── README.md
+│
+├── detection-rules/
+│   ├── account-manipulation.xml
+│   ├── suspicious-process-execution.xml
+│   └── suspicious-http-download.xml
+│
+├── docs/
+│   ├── architecture.md
+│   └── lab-notes.md
+│
+├── scenarios/
+│   ├── ssh-authentication/
+│   │   └── README.md
+│   │
+│   ├── privilege-escalation/
+│   │   ├── README.md
+│   │   └── evidence/
+│   │
+│   ├── suspicious-process-execution/
+│   │   ├── README.md
+│   │   └── evidence/
+│   │
+│   └── suspicious-http-download/
+│       ├── README.md
+│       └── evidence/
+│
+└── scripts/
+```
+
+### Directory Responsibilities
+
+| Directory          | Purpose                                                                     |
+| ------------------ | --------------------------------------------------------------------------- |
+| `detection-rules/` | Custom Wazuh detection rules developed for the laboratory.                  |
+| `docs/`            | Documentation that applies to the laboratory as a whole.                    |
+| `scenarios/`       | Individual detection scenarios, including their documentation and evidence. |
+| `scripts/`         | Helper scripts and future automation.                                       |
+
+Evidence is stored inside each scenario rather than in a global screenshots directory. This keeps screenshots directly associated with the detection they demonstrate.
+
+---
+
 ## Planned Expansion
 
 Future versions of the laboratory may include:
@@ -181,15 +518,19 @@ Future versions of the laboratory may include:
                          Kali Linux
 ```
 
-The expanded environment will allow controlled simulations such as:
+Potential future scenarios include:
 
-* SSH brute-force attempts.
-* Authentication attacks.
-* Privilege escalation.
-* Suspicious command execution.
-* Persistence techniques.
+* Windows endpoint monitoring.
+* Sysmon telemetry.
+* Dedicated attacker VM.
 * Network reconnaissance.
+* Persistence techniques.
+* Privilege escalation.
+* Lateral movement.
+* Credential access.
 * Multi-stage attack scenarios.
+* Correlation across multiple endpoints.
+* Automated incident response.
 
 All attack simulations will be performed against the laboratory environment for educational and defensive security purposes.
 
@@ -208,13 +549,24 @@ All attack simulations will be performed against the laboratory environment for 
 * [x] SCA
 * [x] Syscollector
 * [x] Vulnerability Detection
+* [x] SSH monitoring
+* [x] UFW firewall
+* [x] Hardened SSH configuration
+* [x] Linux auditd
+* [x] Custom detection rules
+* [x] Detection scenarios
+* [x] MITRE ATT&CK mapping
+* [x] Detection validation through `wazuh-logtest`
+* [x] End-to-end detection validation
 
 ### Planned
 
 * [ ] Windows endpoint
 * [ ] Sysmon
 * [ ] Dedicated attacker VM
-* [ ] Custom detection rules
-* [ ] MITRE ATT&CK mapping
+* [ ] Network reconnaissance scenarios
+* [ ] Persistence scenarios
 * [ ] Multi-stage attack scenarios
-* [ ] Full incident response workflow
+* [ ] Multi-endpoint correlation
+* [ ] Automated incident response
+* [ ] Additional detection engineering scenarios

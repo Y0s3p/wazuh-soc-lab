@@ -1,0 +1,11 @@
+<group name="local,network,download,suspicious_activity,">
+
+  <rule id="100300" level="8">
+    <if_sid>80700</if_sid>
+    <field name="audit.execve.a0" type="pcre2">^(curl|wget)$</field>
+    <match type="pcre2">http://</match>
+    <description>Local: HTTP download attempted using curl or wget.</description>
+    <group>network,download,suspicious_activity,</group>
+  </rule>
+
+</group>
